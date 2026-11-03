@@ -59,6 +59,12 @@ Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeStart(
             config.http_host = jstr(env, http_host);
             config.http_port = http_port;
             config.root_dir = jstr(env, root_dir);
+            {
+                auto slash = config.root_dir.find_last_of('/');
+                if (slash != std::string::npos) {
+                    httpace::set_log_file(config.root_dir.substr(0, slash) + "/logs/proxy.log");
+                }
+            }
             config.enabled_plugins = jstr(env, enabled_plugins);
             config.aio_plugins = jstr(env, aio_plugins);
             config.user_m3u_sources = jstr(env, user_m3u_sources);

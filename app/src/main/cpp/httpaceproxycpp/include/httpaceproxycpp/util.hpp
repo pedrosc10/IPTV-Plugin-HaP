@@ -48,5 +48,7 @@ std::string build_url(const ParsedUrl& parsed);
 std::string rewrite_url_host_port(std::string_view url, std::string_view host, std::string_view port);
 
 void log_line(const std::string& level, const std::string& message);
+// Also append log lines to this file (rotated at 8 MB). Empty path disables it.
+void set_log_file(const std::string& path);
 
 } // namespace httpace

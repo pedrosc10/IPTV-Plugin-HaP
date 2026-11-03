@@ -1,5 +1,8 @@
 #include "httpaceproxycpp/util.hpp"
 
+#include <cstdio>
+#include <mutex>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -400,6 +403,12 @@ std::string rewrite_url_host_port(std::string_view url, std::string_view host, s
     return build_url(parsed);
 }
 
+namespace {
+std::mutex& log_file_mutex() { static std::mutex m; return m; }
+std::string& log_file_path() { static std::string p; return p; }
+std::ofstream& log_file_stream() { static std::ofstream s; return s; }
+} // namespace
+
 void log_line(const std::string& level, const std::string& message) {
     auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     std::tm tm{};
@@ -418,6 +427,28 @@ void log_line(const std::string& level, const std::string& message) {
     __android_log_print(priority, "HTTPAceProxyCPP", "[%s] %s %s", buffer, level.c_str(), message.c_str());
 #endif
     std::cerr << "[" << buffer << "] " << level << " " << message << std::endl;
+
+    std::lock_guard<std::mutex> lock(log_file_mutex());
+    auto& path = log_file_path();
+    if (path.empty()) return;
+    auto& out = log_file_stream();
+    if (!out.is_open()) out.open(path, std::ios::app);
+    if (!out.is_open()) return;
+    out << "[" << buffer << "] " << level << " " << message << '\n';
+    out.flush();
+    if (static_cast<long long>(out.tellp()) > 8LL * 1024 * 1024) {
+        out.close();
+        auto rotated = path + ".1";
+        std::remove(rotated.c_str());
+        std::rename(path.c_str(), rotated.c_str());
+    }
+}
+
+void set_log_file(const std::string& path) {
+    std::lock_guard<std::mutex> lock(log_file_mutex());
+    auto& out = log_file_stream();
+    if (out.is_open()) out.close();
+    log_file_path() = path;
 }
 
 } // namespace httpace

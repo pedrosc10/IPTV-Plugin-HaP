@@ -97,6 +97,8 @@
     <string name="button_stop">Detener</string>
     <string name="message_load_channels_hint">Carga una lista para ver sus canales.</string>
     <string name="section_log">Log</string>
+    <string name="button_share_log">Compartir log completo</string>
+    <string name="message_no_log_file">Todavía no hay archivo de log.</string>
     <string name="message_no_log">Sin eventos registrados.</string>
     <string name="message_copied">Copiado: %1$s</string>
     <string name="message_starting_hap">Arrancando HaP...</string>

@@ -42,6 +42,7 @@ public class ProxySupervisorService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        LogFile.init(this);
         aceServe = new AceServeRuntime(this);
         ipfs = new IpfsRuntime(this);
         HttpAceProxyNative.initHttpBridge();

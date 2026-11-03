@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
@@ -28,6 +29,7 @@ import android.widget.Switch;
 import android.widget.TextView;
 
 import com.jopsis.httpaceserveproxy.HapBridge;
+import com.jopsis.httpaceserveproxy.LogFile;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -123,6 +125,7 @@ public class HapConfigActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        LogFile.init(this);
         setContentView(buildLayout());
         refreshConfigState();
         refreshRuntimeState();
@@ -687,6 +690,15 @@ public class HapConfigActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 dp(220)
         ));
+
+        LinearLayout logControls = new LinearLayout(this);
+        logControls.setOrientation(LinearLayout.HORIZONTAL);
+        logControls.setGravity(Gravity.CENTER_VERTICAL);
+        logControls.setPadding(0, dp(10), 0, 0);
+        Button share = button(getString(R.string.button_share_log));
+        share.setOnClickListener(v -> shareLogs());
+        logControls.addView(share, wrapWrap());
+        panel.body.addView(logControls, matchWrap());
         return panel.container;
     }
 
@@ -1744,6 +1756,19 @@ public class HapConfigActivity extends Activity {
         PanelViews(LinearLayout container, LinearLayout body) {
             this.container = container;
             this.body = body;
+        }
+    }
+
+    private void shareLogs() {
+        try {
+            Intent intent = LogFile.shareIntent(this);
+            if (intent == null) {
+                android.widget.Toast.makeText(this, R.string.message_no_log_file, android.widget.Toast.LENGTH_SHORT).show();
+                return;
+            }
+            startActivity(Intent.createChooser(intent, getString(R.string.button_share_log)));
+        } catch (Exception e) {
+            android.widget.Toast.makeText(this, e.toString(), android.widget.Toast.LENGTH_LONG).show();
         }
     }
 }

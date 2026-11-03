@@ -45,6 +45,7 @@ final class ServiceState {
     static synchronized void appendLog(String value) {
         if (value == null || value.isEmpty()) return;
         LOG.append(value).append('\n');
+        LogFile.write(value);
         if (LOG.length() > 12000) LOG.delete(0, LOG.length() - 12000);
     }
 
