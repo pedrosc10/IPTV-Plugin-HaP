@@ -1,0 +1,87 @@
+name: Build fork APK
+
+# Builds a sideloadable APK for this personal fork, signed with the fork key in
+# fork-signing/ so later builds install over earlier ones. Runs on every push to
+# main and can be started by hand from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-fork
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platforms;android-36" "build-tools;36.1.0" "cmake;3.22.1" "ndk;27.0.12077973"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+
+      - name: Cache kubo build
+        id: kubo-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/src/main/jniLibs/arm64-v8a/libipfs.so
+            app/src/main/jniLibs/armeabi-v7a/libipfs.so
+          key: kubo-${{ runner.os }}-${{ hashFiles('tools/fetch-kubo.sh') }}
+
+      - name: Build IPFS (kubo) binaries
+        if: steps.kubo-cache.outputs.cache-hit != 'true'
+        run: tools/fetch-kubo.sh
+
+      - name: Build release APKs
+        env:
+          SIGNING_STORE_FILE: ${{ github.workspace }}/fork-signing/hap-fork.jks
+          SIGNING_STORE_PASSWORD: hapfork-pedro
+          SIGNING_KEY_ALIAS: hapfork
+          SIGNING_KEY_PASSWORD: hapfork-pedro
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :app:assembleRelease
+          echo "VERSION_NAME=$(./gradlew -q :app:printVersionName)" >> "$GITHUB_ENV"
+
+      - name: Collect APKs
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/arm64/release/app-arm64-release.apk     "dist/HaP-${VERSION_NAME}-arm64-v8a.apk"
+          cp app/build/outputs/apk/armv7/release/app-armv7-release.apk     "dist/HaP-${VERSION_NAME}-armeabi-v7a.apk"
+          cp app/build/outputs/apk/universal/release/app-universal-release.apk "dist/HaP-${VERSION_NAME}-universal.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HaP-${{ env.VERSION_NAME }}
+          path: dist/*.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${VERSION_NAME}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.apk --clobber
+          else
+            gh release create "$TAG" dist/*.apk --target "$GITHUB_SHA" \
+              --title "HaP ${VERSION_NAME}" \
+              --notes "Fork build: keep-awake (wake + Wi-Fi locks), 60 s client/video timeouts, 90 s proxy start wait."
+          fi

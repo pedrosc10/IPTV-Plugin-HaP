@@ -70,8 +70,8 @@ Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeStart(
             }
             config.ace_connect_timeout = 5;
             config.ace_result_timeout = 8;
-            config.video_timeout = 30;
-            config.client_write_timeout = 15;
+            config.video_timeout = 60;
+            config.client_write_timeout = 60;
             config.curl_stream_buffer = 512 * 1024;
             g_proxy = std::make_unique<httpace::Proxy>(std::move(config));
             g_running.store(true);

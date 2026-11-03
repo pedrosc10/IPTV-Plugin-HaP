@@ -190,7 +190,8 @@ void Broadcast::stream_hls_url(const std::string& url) {
 void Broadcast::broadcast_chunk(const char* data, std::size_t size) {
     std::vector<char> chunk(data, data + size);
     auto write_timeout = std::max(1, config_.client_write_timeout);
-    auto wait = std::chrono::milliseconds(write_timeout * 1000 / 4);
+    // Bound the per-push wait so one slow client can't stall the engine reader for long.
+    auto wait = std::chrono::milliseconds(std::min(write_timeout * 1000 / 4, 2000));
     auto now = unix_time();
     for (auto& client : clients()) {
         auto result = client->queue->push(chunk, wait);

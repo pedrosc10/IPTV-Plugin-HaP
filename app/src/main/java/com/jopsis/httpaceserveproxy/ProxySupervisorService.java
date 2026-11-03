@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.net.wifi.WifiManager;
+import android.os.PowerManager;
 import android.os.IBinder;
 
 import com.streamvault.plugin.hap.HapConfigActivity;
@@ -34,6 +36,8 @@ public class ProxySupervisorService extends Service {
     private volatile Thread proxyRestartThread;
     private volatile Thread ipfsSupervisorThread;
     private volatile Thread ipfsStopThread;
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     @Override
     public void onCreate() {
@@ -50,12 +54,14 @@ public class ProxySupervisorService extends Service {
             startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.status_stopping), false));
             stopAll(true);
             stopIpfsForShutdown();
+            releaseKeepAwakeLocks();
             clearNotification();
             stopSelf();
             return START_NOT_STICKY;
         }
         if (ACTION_START_IPFS.equals(action)) {
             startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.status_starting), true));
+            acquireKeepAwakeLocks();
             startIpfsAsync();
             return START_STICKY;
         }
@@ -66,6 +72,7 @@ public class ProxySupervisorService extends Service {
         }
         ServiceState.desiredRunning = true;
         startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.status_starting), true));
+        acquireKeepAwakeLocks();
         if (ACTION_RESTART_PROXY.equals(action)) {
             startProxyRestart();
             return START_STICKY;
@@ -98,6 +105,7 @@ public class ProxySupervisorService extends Service {
     public void onDestroy() {
         stopAll(true);
         stopIpfsForShutdown();
+        releaseKeepAwakeLocks();
         clearNotification();
         super.onDestroy();
     }
@@ -272,7 +280,7 @@ public class ProxySupervisorService extends Service {
     }
 
     private boolean waitForProxyReady() {
-        boolean proxyOk = HealthClient.waitForTcp(ProxyExposure.LOCAL_HOST, ProxyExposure.PROXY_PORT, 30000);
+        boolean proxyOk = HealthClient.waitForTcp(ProxyExposure.LOCAL_HOST, ProxyExposure.PROXY_PORT, 90000);
         ServiceState.proxyRunning = proxyOk || HttpAceProxyNative.nativeIsRunning();
         return ServiceState.proxyRunning;
     }
@@ -424,5 +432,44 @@ public class ProxySupervisorService extends Service {
     private void updateNotification(String text) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         manager.notify(NOTIFICATION_ID, buildNotification(text));
+    }
+
+    /**
+     * Keeps the CPU and Wi-Fi radio awake while HaP serves streams. Without these
+     * locks Android may suspend the device or power-save the Wi-Fi when the screen
+     * is locked, which drops LAN clients (TiviMate, Kodi...) mid-stream.
+     */
+    @SuppressWarnings("deprecation")
+    private synchronized void acquireKeepAwakeLocks() {
+        try {
+            if (wakeLock == null) {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "HaP::Server");
+                    wakeLock.setReferenceCounted(false);
+                }
+            }
+            if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire();
+            if (wifiLock == null) {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null) {
+                    wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "HaP::Server");
+                    wifiLock.setReferenceCounted(false);
+                }
+            }
+            if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
+            ServiceState.appendLog("keep-awake locks acquired");
+        } catch (Throwable t) {
+            ServiceState.appendLog("keep-awake lock failed: " + t);
+        }
+    }
+
+    private synchronized void releaseKeepAwakeLocks() {
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Throwable t) {
+            ServiceState.appendLog("keep-awake lock release failed: " + t);
+        }
     }
 }
