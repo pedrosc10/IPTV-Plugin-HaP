@@ -40,6 +40,8 @@ public:
     Json content_info(const std::map<std::string, std::string>& params);
     AceStartParams start_broadcast(const std::map<std::string, std::string>& params);
     std::map<std::string, std::string> status(int timeout_seconds = 1);
+    // Most recent STATUS pushed by the engine (non-blocking); empty if none yet.
+    std::map<std::string, std::string> latest_status() const;
     void stop_broadcast();
     void shutdown();
     bool alive() const { return running_; }
@@ -62,6 +64,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::map<std::string, std::deque<std::vector<std::string>>> messages_;
+    std::string last_status_;
 };
 
 } // namespace httpace

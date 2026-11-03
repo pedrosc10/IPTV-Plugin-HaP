@@ -21,6 +21,8 @@ struct Config {
     int video_seekback = 0;
     int client_queue_size = 256;
     int client_write_timeout = 15;
+    // Engine-side reconnects per broadcast before giving up (reset after 60 s of good streaming).
+    int reconnect_attempts = 5;
     int curl_stream_buffer = 1048576;
     bool use_chunked = true;
     bool firewall = false;

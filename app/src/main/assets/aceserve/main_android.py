@@ -181,6 +181,14 @@ def patch_player_config():
                     obj.set_playerconfig("live_cache_type", "disk")
                     obj.set_playerconfig("live_cache_size", 1048570000)
                     obj.set_playerconfig("download_dir", CACHE_DIR)
+                    live_buffer = os.environ.get("ACE_LIVE_BUFFER", "")
+                    if live_buffer.isdigit() and int(live_buffer) > 0:
+                        # Best effort: the key name matches the Ace Stream player setting.
+                        try:
+                            obj.set_playerconfig("live_buffer", int(live_buffer))
+                            log("live_buffer set to {}s".format(live_buffer))
+                        except Exception as exc:
+                            log("failed to set live_buffer: {}".format(exc))
                     original_set = obj.set_playerconfig
 
                     @wraps(original_set)

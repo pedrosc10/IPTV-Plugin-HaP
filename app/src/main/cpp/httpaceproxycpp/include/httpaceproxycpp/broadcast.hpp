@@ -42,6 +42,8 @@ private:
     bool closed_ = false;
 };
 
+class Broadcast;
+
 struct StreamClient {
     std::string session_id;
     std::string client_ip;
@@ -51,6 +53,7 @@ struct StreamClient {
     std::int64_t connection_time = 0;
     std::shared_ptr<ChunkQueue> queue;
     std::weak_ptr<AceClient> ace;
+    std::weak_ptr<Broadcast> broadcast;
     std::atomic<std::int64_t> last_activity{0};
     std::atomic<std::uint64_t> bytes_sent{0};
     std::atomic<int> dropped_chunks{0};
@@ -72,14 +75,24 @@ public:
     std::vector<std::shared_ptr<StreamClient>> clients() const;
     void start_once();
     void stop();
-    std::shared_ptr<AceClient> ace() const { return ace_; }
+    std::shared_ptr<AceClient> ace() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return ace_;
+    }
+    // True once the stream thread has given up or the broadcast was stopped;
+    // such a broadcast must not receive new clients.
+    bool finished() const { return stopped_ || (started_ && !running_); }
     std::string infohash() const { return infohash_; }
 
 private:
     void stream_loop();
     void stream_http_url(const std::string& url);
     void stream_hls_url(const std::string& url);
-    void broadcast_chunk(const char* data, std::size_t size);
+    void broadcast_chunk(const char* data, std::size_t size, bool keepalive = false);
+    void send_keepalive();
+    bool run_attempt();
+    void wait_with_keepalive(int seconds);
+    std::shared_ptr<AceClient> swap_ace(std::shared_ptr<AceClient> next);
 
     std::string infohash_;
     Config config_;
@@ -91,6 +104,9 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> started_{false};
     std::atomic<bool> stopped_{false};
+    std::atomic<bool> ts_output_{false};
+    std::atomic<bool> any_data_{false};
+    std::mutex chunk_mutex_;
     std::thread stream_thread_;
 };
 

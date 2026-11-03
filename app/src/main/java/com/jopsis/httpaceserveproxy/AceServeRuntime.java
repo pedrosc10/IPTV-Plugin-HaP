@@ -91,6 +91,8 @@ final class AceServeRuntime {
         Map<String, String> env = builder.environment();
         env.put("ACE_ROOT", root.getAbsolutePath());
         env.put("ACE_CACHE_DIR", cache.getAbsolutePath());
+        int liveBuffer = ServerTuning.liveBuffer(context);
+        if (liveBuffer > 0) env.put("ACE_LIVE_BUFFER", String.valueOf(liveBuffer));
         env.put("ACE_ANDROID_INFO", androidInfo.getAbsolutePath());
         env.put("ACESTREAM_HOME", root.getAbsolutePath());
         env.put("ANDROID_ROOT", "/system");

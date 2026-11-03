@@ -76,7 +76,8 @@ std::shared_ptr<StreamClient> Broadcast::add_client(const std::string& client_ip
     client->connection_time = unix_time();
     client->last_activity = client->connection_time;
     client->queue = std::make_shared<ChunkQueue>(static_cast<std::size_t>(std::max(2, config_.client_queue_size)));
-    client->ace = ace_;
+    client->ace = ace();
+    client->broadcast = weak_from_this();
     {
         std::lock_guard<std::mutex> lock(mutex_);
         clients_.push_back(client);
@@ -126,22 +127,113 @@ void Broadcast::stop() {
     if (!stopped_.compare_exchange_strong(expected, true)) return;
     running_ = false;
     for (auto& client : clients()) client->queue->close();
-    if (ace_) {
-        try { ace_->stop_broadcast(); } catch (...) {}
-        try { ace_->shutdown(); } catch (...) {}
+    auto ace = swap_ace(nullptr);
+    if (ace) {
+        try { ace->stop_broadcast(); } catch (...) {}
+        try { ace->shutdown(); } catch (...) {}
     }
     if (stream_thread_.joinable() && stream_thread_.get_id() != std::this_thread::get_id()) stream_thread_.join();
 }
 
+std::shared_ptr<AceClient> Broadcast::swap_ace(std::shared_ptr<AceClient> next) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto old = ace_;
+    ace_ = std::move(next);
+    return old;
+}
+
+// One engine session: START, then relay the stream until it ends. Returns true
+// if any data was relayed.
+bool Broadcast::run_attempt() {
+    auto ace = this->ace();
+    if (!ace) throw std::runtime_error("no engine session");
+    any_data_ = false;
+    std::atomic<bool> attempt_done{false};
+    std::thread keepalive([this, &attempt_done] {
+        while (!attempt_done && running_ && !any_data_) {
+            send_keepalive();
+            for (int i = 0; i < 10 && !attempt_done; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    });
+    struct JoinGuard {
+        std::atomic<bool>& done;
+        std::thread& t;
+        ~JoinGuard() { done = true; if (t.joinable()) t.join(); }
+    } guard{attempt_done, keepalive};
+    auto started = ace->start_broadcast(start_params_);
+    auto url = rewrite_url_host_port(url_decode(started.url), config_.ace_host, std::to_string(config_.ace_http_port));
+    log_line("INFO", "[" + infohash_.substr(0, 8) + "] stream URL " + url);
+    if (ends_with(parse_url(url).path, ".m3u8")) stream_hls_url(url);
+    else stream_http_url(url);
+    return any_data_;
+}
+
+// MPEG-TS null packets (PID 0x1FFF): players discard them, but they keep the
+// HTTP connection active so the player's read timeout doesn't fire while the
+// engine session is (re)started. Only sent before real data flows.
+void Broadcast::send_keepalive() {
+    static const std::vector<char> null_packets = [] {
+        std::vector<char> out;
+        for (int i = 0; i < 7; ++i) {
+            out.push_back(static_cast<char>(0x47));
+            out.push_back(static_cast<char>(0x1F));
+            out.push_back(static_cast<char>(0xFF));
+            out.push_back(static_cast<char>(0x10));
+            out.insert(out.end(), 184, static_cast<char>(0xFF));
+        }
+        return out;
+    }();
+    if (ts_output_) broadcast_chunk(null_packets.data(), null_packets.size(), true);
+}
+
+void Broadcast::wait_with_keepalive(int seconds) {
+    for (int i = 0; i < seconds && running_ && client_count() > 0; ++i) {
+        send_keepalive();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+}
+
 void Broadcast::stream_loop() {
-    try {
-        auto started = ace_->start_broadcast(start_params_);
-        auto url = rewrite_url_host_port(url_decode(started.url), config_.ace_host, std::to_string(config_.ace_http_port));
-        log_line("INFO", "[" + infohash_.substr(0, 8) + "] stream URL " + url);
-        if (ends_with(parse_url(url).path, ".m3u8")) stream_hls_url(url);
-        else stream_http_url(url);
-    } catch (const std::exception& e) {
-        log_line("ERROR", "[" + infohash_.substr(0, 8) + "] stream failed: " + std::string(e.what()));
+    const std::string tag = "[" + infohash_.substr(0, 8) + "] ";
+    const int max_attempts = std::max(0, config_.reconnect_attempts);
+    int failures = 0;
+    while (running_ && client_count() > 0) {
+        auto attempt_start = std::chrono::steady_clock::now();
+        try {
+            run_attempt();
+        } catch (const std::exception& e) {
+            log_line("ERROR", tag + "stream failed: " + std::string(e.what()));
+        }
+        if (!running_ || client_count() == 0) break;
+
+        auto lasted = std::chrono::steady_clock::now() - attempt_start;
+        if (lasted > std::chrono::seconds(60)) failures = 0;
+        if (++failures > max_attempts) {
+            log_line("ERROR", tag + "giving up after " + std::to_string(max_attempts) + " reconnect attempts");
+            break;
+        }
+        log_line("WARNING", tag + "engine stream dropped, reconnecting (" + std::to_string(failures) + "/" +
+                 std::to_string(max_attempts) + ")");
+
+        auto old = swap_ace(nullptr);
+        if (old) {
+            try { old->stop_broadcast(); } catch (...) {}
+            try { old->shutdown(); } catch (...) {}
+        }
+        any_data_ = false;
+        wait_with_keepalive(std::min(failures * 2, 8));
+        if (!running_ || client_count() == 0) break;
+        try {
+            auto fresh = std::make_shared<AceClient>(config_, "Broadcast_" + infohash_.substr(0, 8));
+            fresh->authenticate();
+            if (!running_) {
+                try { fresh->shutdown(); } catch (...) {}
+                break;
+            }
+            swap_ace(std::move(fresh));
+        } catch (const std::exception& e) {
+            log_line("ERROR", tag + "engine reconnect failed: " + std::string(e.what()));
+        }
     }
     running_ = false;
     for (auto& client : clients()) client->queue->close();
@@ -160,6 +252,7 @@ void Broadcast::stream_http_url(const std::string& url) {
 
 void Broadcast::stream_hls_url(const std::string& url) {
     std::vector<std::string> seen;
+    int consecutive_errors = 0;
     while (running_ && client_count() > 0) {
         try {
             auto response = http_client_.get(url, {}, config_.video_timeout);
@@ -180,14 +273,23 @@ void Broadcast::stream_hls_url(const std::string& url) {
                 if (seen.size() > 50) seen.erase(seen.begin());
                 if (!running_ || client_count() == 0) break;
             }
+            consecutive_errors = 0;
         } catch (const std::exception& e) {
             log_line("ERROR", "HLS refresh failed: " + std::string(e.what()));
+            // Let stream_loop rebuild the engine session instead of polling a dead playlist forever.
+            if (++consecutive_errors >= 5) return;
             std::this_thread::sleep_for(std::chrono::seconds(1));
         }
     }
 }
 
-void Broadcast::broadcast_chunk(const char* data, std::size_t size) {
+void Broadcast::broadcast_chunk(const char* data, std::size_t size, bool keepalive) {
+    std::lock_guard<std::mutex> chunk_lock(chunk_mutex_);
+    if (keepalive) {
+        if (any_data_) return;  // never interleave filler with real stream bytes
+    } else if (size > 0 && !any_data_.exchange(true) && !ts_output_) {
+        ts_output_ = static_cast<unsigned char>(data[0]) == 0x47;
+    }
     std::vector<char> chunk(data, data + size);
     auto write_timeout = std::max(1, config_.client_write_timeout);
     // Bound the per-push wait so one slow client can't stall the engine reader for long.
@@ -221,7 +323,12 @@ std::shared_ptr<Broadcast> BroadcastManager::get_or_create(const std::string& in
                                                            const std::map<std::string, std::string>& params) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = broadcasts_.find(infohash);
-    if (it != broadcasts_.end()) return it->second;
+    if (it != broadcasts_.end()) {
+        if (!it->second->finished()) return it->second;
+        // A dead broadcast never sends data again; replace it instead of
+        // attaching the new client to it (that client would hang forever).
+        broadcasts_.erase(it);
+    }
     auto broadcast = std::make_shared<Broadcast>(infohash, config_, http_client_, params);
     broadcasts_[infohash] = broadcast;
     return broadcast;

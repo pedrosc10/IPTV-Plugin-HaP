@@ -37,11 +37,16 @@ final class ConnectedClientsClient {
             String userAgent = item.optString("userAgent", "");
             String channel = item.optString("channelName", "");
             double megabytes = item.optDouble("megabytesSent", item.optDouble("bytesSent", 0) / (1024.0 * 1024.0));
+            JSONObject stat = item.optJSONObject("stat");
+            int peers = stat == null ? 0 : stat.optInt("peers", 0);
+            int speedDown = stat == null ? 0 : stat.optInt("speed_down", 0);
             out.add(new Client(
                     ip.isEmpty() ? "-" : ip,
                     deviceName(userAgent),
                     channel.isEmpty() ? "-" : channel,
-                    Math.max(0, megabytes)));
+                    Math.max(0, megabytes),
+                    peers,
+                    speedDown));
         }
         return out;
     }
@@ -93,12 +98,16 @@ final class ConnectedClientsClient {
         final String device;
         final String channel;
         final double megabytes;
+        final int peers;
+        final int speedDownKbps;
 
-        Client(String ip, String device, String channel, double megabytes) {
+        Client(String ip, String device, String channel, double megabytes, int peers, int speedDownKbps) {
             this.ip = ip;
             this.device = device;
             this.channel = channel;
             this.megabytes = megabytes;
+            this.peers = peers;
+            this.speedDownKbps = speedDownKbps;
         }
     }
 }

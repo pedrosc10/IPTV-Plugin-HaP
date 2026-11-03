@@ -15,6 +15,10 @@ import com.streamvault.plugin.hap.HapConfigActivity;
 import com.streamvault.plugin.hap.R;
 
 import java.io.File;
+import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class ProxySupervisorService extends Service {
     static final String ACTION_START = "com.jopsis.httpaceserveproxy.START";
@@ -38,6 +42,11 @@ public class ProxySupervisorService extends Service {
     private volatile Thread ipfsStopThread;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private ScheduledExecutorService watchdog;
+    private volatile boolean serverWanted;
+    private int unhealthyTicks;
+    private long lastRecoveryAt;
+    private String lastNotificationText = "";
 
     @Override
     public void onCreate() {
@@ -54,6 +63,8 @@ public class ProxySupervisorService extends Service {
         if (ACTION_STOP.equals(action)) {
             startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.status_stopping), false));
             stopAll(true);
+            serverWanted = false;
+            stopWatchdog();
             stopIpfsForShutdown();
             releaseKeepAwakeLocks();
             clearNotification();
@@ -74,6 +85,8 @@ public class ProxySupervisorService extends Service {
         ServiceState.desiredRunning = true;
         startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.status_starting), true));
         acquireKeepAwakeLocks();
+        serverWanted = true;
+        startWatchdog();
         if (ACTION_RESTART_PROXY.equals(action)) {
             startProxyRestart();
             return START_STICKY;
@@ -104,6 +117,8 @@ public class ProxySupervisorService extends Service {
 
     @Override
     public void onDestroy() {
+        serverWanted = false;
+        stopWatchdog();
         stopAll(true);
         stopIpfsForShutdown();
         releaseKeepAwakeLocks();
@@ -295,6 +310,10 @@ public class ProxySupervisorService extends Service {
         String customPlaylistPath = CustomPlaylistCatalog.playlistPath(this);
         String httpHost = ProxyExposure.listenHost(this);
         ServiceState.appendLog("proxy listen: " + httpHost + ":" + ProxyExposure.PROXY_PORT);
+        HttpAceProxyNative.nativeSetTuning(
+                ServerTuning.clientTimeout(this),
+                ServerTuning.videoTimeout(this),
+                ServerTuning.reconnectAttempts(this));
         proxyThread = new Thread(() -> {
             try {
                 HttpAceProxyNative.start(
@@ -471,6 +490,78 @@ public class ProxySupervisorService extends Service {
             if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         } catch (Throwable t) {
             ServiceState.appendLog("keep-awake lock release failed: " + t);
+        }
+    }
+
+    private synchronized void startWatchdog() {
+        if (watchdog != null) return;
+        watchdog = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, "hap-watchdog"));
+        watchdog.scheduleWithFixedDelay(this::watchdogTick, 20, 15, TimeUnit.SECONDS);
+    }
+
+    private synchronized void stopWatchdog() {
+        if (watchdog == null) return;
+        watchdog.shutdownNow();
+        watchdog = null;
+    }
+
+    private static boolean isAlive(Thread thread) {
+        return thread != null && thread.isAlive();
+    }
+
+    /**
+     * Every 15 s: if the engine or proxy stopped answering for two checks in a
+     * row, restart what died (at most once a minute). When healthy, refresh the
+     * notification with live stream stats.
+     */
+    private void watchdogTick() {
+        try {
+            if (!serverWanted) return;
+            if (isAlive(supervisorThread) || isAlive(proxyRestartThread)) return;
+            boolean aceUp = aceServe != null && aceServe.isRunning()
+                    && HealthClient.waitForTcp("127.0.0.1", ACE_HTTP_PORT, 1500);
+            boolean proxyUp = HealthClient.waitForTcp(ProxyExposure.LOCAL_HOST, ProxyExposure.PROXY_PORT, 1500);
+            if (aceUp && proxyUp) {
+                unhealthyTicks = 0;
+                if ("Running".equals(ServiceState.phase)) refreshStatusNotification();
+                return;
+            }
+            if (++unhealthyTicks < 2) return;
+            long now = System.currentTimeMillis();
+            if (now - lastRecoveryAt < 60_000) return;
+            lastRecoveryAt = now;
+            unhealthyTicks = 0;
+            ServiceState.appendLog("watchdog: engine=" + (aceUp ? "up" : "down")
+                    + " proxy=" + (proxyUp ? "up" : "down") + ", recovering");
+            if (!aceUp) {
+                stopAll(false);
+                startAll();
+            } else {
+                startProxyRestart();
+            }
+        } catch (Throwable t) {
+            ServiceState.appendLog("watchdog error: " + t);
+        }
+    }
+
+    private void refreshStatusNotification() {
+        String text = ProxyExposure.notificationText(this);
+        try {
+            List<ConnectedClientsClient.Client> clients = ConnectedClientsClient.load();
+            if (!clients.isEmpty()) {
+                int peers = 0;
+                int speed = 0;
+                for (ConnectedClientsClient.Client client : clients) {
+                    peers = Math.max(peers, client.peers);
+                    speed = Math.max(speed, client.speedDownKbps);
+                }
+                text = text + " · " + getString(R.string.status_stream_details, clients.size(), peers, speed);
+            }
+        } catch (Exception ignored) {
+        }
+        if (!text.equals(lastNotificationText)) {
+            lastNotificationText = text;
+            updateNotification(text);
         }
     }
 }

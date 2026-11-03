@@ -31,6 +31,12 @@ void throw_java(JNIEnv* env, const std::exception& e) {
 
 } // namespace
 
+namespace {
+std::atomic<int> g_client_write_timeout{60};
+std::atomic<int> g_video_timeout{60};
+std::atomic<int> g_reconnect_attempts{5};
+} // namespace
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeStart(
     JNIEnv* env,
@@ -76,8 +82,9 @@ Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeStart(
             }
             config.ace_connect_timeout = 5;
             config.ace_result_timeout = 8;
-            config.video_timeout = 60;
-            config.client_write_timeout = 60;
+            config.video_timeout = g_video_timeout.load();
+            config.client_write_timeout = g_client_write_timeout.load();
+            config.reconnect_attempts = g_reconnect_attempts.load();
             config.curl_stream_buffer = 512 * 1024;
             g_proxy = std::make_unique<httpace::Proxy>(std::move(config));
             g_running.store(true);
@@ -110,4 +117,12 @@ Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeStop(JNIEnv*, jclass)
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeIsRunning(JNIEnv*, jclass) {
     return g_running.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_jopsis_httpaceserveproxy_HttpAceProxyNative_nativeSetTuning(
+    JNIEnv*, jclass, jint client_write_timeout, jint video_timeout, jint reconnect_attempts) {
+    g_client_write_timeout.store(client_write_timeout > 0 ? client_write_timeout : 60);
+    g_video_timeout.store(video_timeout > 0 ? video_timeout : 60);
+    g_reconnect_attempts.store(reconnect_attempts >= 0 ? reconnect_attempts : 5);
 }

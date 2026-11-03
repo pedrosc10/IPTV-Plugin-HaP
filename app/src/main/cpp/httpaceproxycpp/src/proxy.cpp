@@ -385,6 +385,29 @@ void Proxy::send_error(ClientConnection& connection, int status, const std::stri
     send_simple_response(connection, status, "text/plain", message);
 }
 
+namespace {
+double to_number(const std::map<std::string, std::string>& m, const std::string& key) {
+    auto it = m.find(key);
+    if (it == m.end()) return 0;
+    try { return std::stod(it->second); } catch (...) { return 0; }
+}
+
+Json client_engine_stat(const std::shared_ptr<StreamClient>& client) {
+    auto broadcast = client->broadcast.lock();
+    if (!broadcast) return Json::object{};
+    auto ace = broadcast->ace();
+    if (!ace) return Json::object{{"status", "reconnecting"}};
+    auto st = ace->latest_status();
+    if (st.empty()) return Json::object{};
+    return Json::object{
+        {"status", st.count("status") ? st.at("status") : std::string("")},
+        {"peers", to_number(st, "peers")},
+        {"speed_down", to_number(st, "speed_down")},
+        {"speed_up", to_number(st, "speed_up")}
+    };
+}
+} // namespace
+
 Json Proxy::clients_json() {
     Json::array clients;
     for (const auto& client : broadcasts_.all_clients()) {
@@ -398,7 +421,7 @@ Json Proxy::clients_json() {
             {"megabytesSent", static_cast<double>(client->bytes_sent.load(std::memory_order_relaxed)) / (1024.0 * 1024.0)},
             {"startTime", static_cast<double>(client->connection_time)},
             {"durationTime", format_duration(std::chrono::seconds(unix_time() - client->connection_time))},
-            {"stat", Json::object{}}
+            {"stat", client_engine_stat(client)}
         });
     }
     return Json::object{

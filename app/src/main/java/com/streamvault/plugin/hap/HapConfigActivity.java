@@ -30,6 +30,7 @@ import android.widget.TextView;
 
 import com.jopsis.httpaceserveproxy.HapBridge;
 import com.jopsis.httpaceserveproxy.LogFile;
+import com.jopsis.httpaceserveproxy.ServerTuning;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -95,6 +96,12 @@ public class HapConfigActivity extends Activity {
     private EditText ipfsGatewayPortEdit;
     private EditText ipfsStorageMaxEdit;
     private TextView ipfsAdvancedFeedbackView;
+    private EditText tuningClientTimeoutEdit;
+    private EditText tuningVideoTimeoutEdit;
+    private EditText tuningReconnectsEdit;
+    private EditText tuningLiveBufferEdit;
+    private TextView tuningFeedbackView;
+    private boolean batteryPromptShown;
     private EditText sourceNameEdit;
     private EditText sourceUrlEdit;
     private TextView sourceFeedbackView;
@@ -127,6 +134,7 @@ public class HapConfigActivity extends Activity {
         super.onCreate(savedInstanceState);
         LogFile.init(this);
         setContentView(buildLayout());
+        if (HapBridge.isExternalPlayerServerEnabled(this)) maybeRequestBatteryExemption();
         refreshConfigState();
         refreshRuntimeState();
         populateIpfsAdvancedFields();
@@ -309,7 +317,106 @@ public class HapConfigActivity extends Activity {
         busyControls.add(externalServerSwitch);
         row.addView(externalServerSwitch, wrapWrap());
 
+        panel.body.addView(buildServerTuningSection(), matchWrapTop(12));
         return panel.container;
+    }
+
+    private View buildServerTuningSection() {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+
+        String title = getString(R.string.label_server_tuning);
+        TextView header = text("+ " + title, 13, COLOR_TEXT_SECONDARY, Typeface.BOLD);
+        header.setFocusable(true);
+        header.setBackground(focusBackground(0x00000000, COLOR_SURFACE_FOCUSED, dp(8), 0, 0));
+        header.setPadding(dp(8), dp(8), dp(8), dp(8));
+        container.addView(header, matchWrap());
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setBackground(roundRect(COLOR_PANEL_SOFT, dp(10), 0, 0));
+        body.setPadding(dp(12), dp(12), dp(12), dp(12));
+        body.setVisibility(View.GONE);
+        LinearLayout.LayoutParams bodyParams = matchWrap();
+        bodyParams.topMargin = dp(6);
+        container.addView(body, bodyParams);
+
+        header.setOnClickListener(v -> {
+            boolean expanded = body.getVisibility() == View.VISIBLE;
+            body.setVisibility(expanded ? View.GONE : View.VISIBLE);
+            header.setText((expanded ? "+ " : "- ") + title);
+        });
+
+        tuningClientTimeoutEdit = tuningField(body, R.string.label_tuning_client_timeout, 0);
+        tuningVideoTimeoutEdit = tuningField(body, R.string.label_tuning_video_timeout, 8);
+        tuningReconnectsEdit = tuningField(body, R.string.label_tuning_reconnects, 8);
+        tuningLiveBufferEdit = tuningField(body, R.string.label_tuning_live_buffer, 8);
+
+        LinearLayout saveRow = new LinearLayout(this);
+        saveRow.setOrientation(LinearLayout.HORIZONTAL);
+        saveRow.setGravity(Gravity.RIGHT);
+        saveRow.setPadding(0, dp(10), 0, 0);
+        body.addView(saveRow, matchWrap());
+        Button save = button(getString(R.string.button_save));
+        save.setOnClickListener(v -> saveServerTuning());
+        saveRow.addView(save, wrapWrap());
+
+        tuningFeedbackView = text("", 13, COLOR_TEXT_SECONDARY, Typeface.NORMAL);
+        tuningFeedbackView.setPadding(0, dp(8), 0, 0);
+        tuningFeedbackView.setVisibility(View.GONE);
+        body.addView(tuningFeedbackView, matchWrap());
+
+        populateServerTuningFields();
+        return container;
+    }
+
+    private EditText tuningField(LinearLayout body, int labelRes, int topMargin) {
+        TextView label = text(getString(labelRes), 12, COLOR_TEXT_SECONDARY, Typeface.NORMAL);
+        body.addView(label, matchWrapTop(topMargin));
+        EditText edit = editText(getString(labelRes), false);
+        edit.setInputType(InputType.TYPE_CLASS_NUMBER);
+        body.addView(edit, matchWrapTop(4));
+        return edit;
+    }
+
+    private void populateServerTuningFields() {
+        tuningClientTimeoutEdit.setText(String.valueOf(ServerTuning.clientTimeout(this)));
+        tuningVideoTimeoutEdit.setText(String.valueOf(ServerTuning.videoTimeout(this)));
+        tuningReconnectsEdit.setText(String.valueOf(ServerTuning.reconnectAttempts(this)));
+        tuningLiveBufferEdit.setText(String.valueOf(ServerTuning.liveBuffer(this)));
+    }
+
+    private void saveServerTuning() {
+        int clientTimeout = parseIntOrDefault(tuningClientTimeoutEdit.getText().toString(), ServerTuning.DEFAULT_CLIENT_TIMEOUT);
+        int videoTimeout = parseIntOrDefault(tuningVideoTimeoutEdit.getText().toString(), ServerTuning.DEFAULT_VIDEO_TIMEOUT);
+        int reconnects = parseIntOrDefault(tuningReconnectsEdit.getText().toString(), ServerTuning.DEFAULT_RECONNECTS);
+        int liveBuffer = parseIntOrDefault(tuningLiveBufferEdit.getText().toString(), ServerTuning.DEFAULT_LIVE_BUFFER);
+        ServerTuning.save(this, clientTimeout, videoTimeout, reconnects, liveBuffer);
+        populateServerTuningFields();
+        boolean running = HapBridge.status(this).desiredRunning;
+        if (running) HapBridge.restart(this);
+        tuningFeedbackView.setTextColor(COLOR_SUCCESS);
+        tuningFeedbackView.setText(getString(running ? R.string.message_tuning_saved_restart : R.string.message_tuning_saved));
+        tuningFeedbackView.setVisibility(View.VISIBLE);
+    }
+
+    /** Asks Android to exempt HaP from battery optimization so the server isn't killed in the background. */
+    private void maybeRequestBatteryExemption() {
+        if (batteryPromptShown) return;
+        try {
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(Context.POWER_SERVICE);
+            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+            batteryPromptShown = true;
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        android.net.Uri.parse("package:" + getPackageName())));
+            } catch (android.content.ActivityNotFoundException notFound) {
+                // Some TV builds hide the direct dialog; fall back to the settings list.
+                startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            }
+        } catch (Exception e) {
+            android.util.Log.w("HaP", "battery exemption request failed", e);
+        }
     }
 
     private View buildIpfsPanel() {
@@ -1110,6 +1217,7 @@ public class HapConfigActivity extends Activity {
     }
 
     private void setExternalPlayerServer(boolean enabled) {
+        if (enabled) maybeRequestBatteryExemption();
         runBusy(
                 enabled ? getString(R.string.message_enabling_external_server) : getString(R.string.message_disabling_external_server),
                 () -> {

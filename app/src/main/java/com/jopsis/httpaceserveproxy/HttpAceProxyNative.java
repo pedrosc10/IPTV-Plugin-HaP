@@ -56,6 +56,9 @@ final class HttpAceProxyNative {
             int maxConnections,
             int maxConcurrentChannels);
 
+    /** Proxy timeouts/reconnects applied on the next nativeStart. */
+    static native void nativeSetTuning(int clientWriteTimeout, int videoTimeout, int reconnectAttempts);
+
     static native void nativeStop();
 
     static native boolean nativeIsRunning();
