@@ -105,6 +105,7 @@
     <string name="label_tuning_live_buffer">Live buffer (s, 0 = engine default)</string>
     <string name="message_tuning_saved">Saved. Applies on next start.</string>
     <string name="message_tuning_saved_restart">Saved. Restarting HaP to apply.</string>
+    <string name="status_backend_blocked">⚠ Ace Stream blocked by your network — turn on a VPN (Warp) on this device</string>
     <string name="button_share_log">Share full log</string>
     <string name="message_no_log_file">No log file yet.</string>
     <string name="message_no_log">No events logged.</string>

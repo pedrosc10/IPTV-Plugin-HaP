@@ -105,6 +105,7 @@
     <string name="label_tuning_live_buffer">Buffer en directo (s, 0 = por defecto del motor)</string>
     <string name="message_tuning_saved">Guardado. Se aplica en el próximo arranque.</string>
     <string name="message_tuning_saved_restart">Guardado. Reiniciando HaP para aplicarlo.</string>
+    <string name="status_backend_blocked">⚠ Ace Stream bloqueado por tu red — activa una VPN (Warp) en este dispositivo</string>
     <string name="button_share_log">Compartir log completo</string>
     <string name="message_no_log_file">Todavía no hay archivo de log.</string>
     <string name="message_no_log">Sin eventos registrados.</string>

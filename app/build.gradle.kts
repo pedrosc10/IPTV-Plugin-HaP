@@ -34,8 +34,8 @@ android {
         applicationId = "com.streamvault.plugin.hap"
         minSdk = 27
         targetSdk = 36
-        versionCode = 1016
-        versionName = "1.3.3-pedro.3"
+        versionCode = 1017
+        versionName = "1.3.3-pedro.4"
 
         // Not set here: abiFilters is unioned (not overridden) with each
         // productFlavor's own abiFilters below, so a defaultConfig value

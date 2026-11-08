@@ -127,6 +127,7 @@ public class ProxySupervisorService extends Service {
     }
 
     private synchronized void startAll() {
+        BackendBlockDetector.reset();
         if (supervisorThread != null && supervisorThread.isAlive()) return;
         ServiceState.desiredRunning = true;
         supervisorThread = new Thread(this::runSupervisor, "proxy-supervisor");
@@ -545,6 +546,14 @@ public class ProxySupervisorService extends Service {
     }
 
     private void refreshStatusNotification() {
+        if (BackendBlockDetector.blocked) {
+            String warning = getString(R.string.status_backend_blocked);
+            if (!warning.equals(lastNotificationText)) {
+                lastNotificationText = warning;
+                updateNotification(warning);
+            }
+            return;
+        }
         String text = ProxyExposure.notificationText(this);
         try {
             List<ConnectedClientsClient.Client> clients = ConnectedClientsClient.load();

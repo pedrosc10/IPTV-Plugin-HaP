@@ -173,6 +173,7 @@ final class AceServeRuntime {
                 String line;
                 while ((line = reader.readLine()) != null) {
                     ServiceState.appendLog("ace: " + line);
+                    BackendBlockDetector.onEngineLine(line);
                     Log.i(TAG, line);
                 }
                 try {
